@@ -32,6 +32,9 @@ class Client
 
     private $isConnected = false;
 
+    private $callbacks = [];
+    private $eventListeners = [];
+
     public function __construct(EngineInterface $engine, LoggerInterface $logger = null)
     {
         $this->engine = $engine;
@@ -77,7 +80,77 @@ class Client
     public function read()
     {
         $this->logger->debug('Reading a new message from the socket');
-        return $this->engine->read();
+        $packet = $this->engine->read();
+        $this->parsePacket($packet);
+    }
+
+    public function listen() {
+        while (true) {
+            try{
+                $this->read();
+            } catch (Exception $e) {
+                break;
+            }
+        }
+    }
+
+    private function parsePacket($packet) {
+        if (!empty($packet)) {
+            var_dump($packet);
+            $pos = strpos($packet, "[");
+            if($pos!==false) {
+                $code = substr($packet, 0, $pos);
+                $code = intval($code);
+                $data = substr($packet, $pos);
+                $data = json_decode($data, true);
+                switch ($code) {
+                    case 42:
+                        if ($data[0] == "ACK") {
+                            //acknowledge
+                            $ack = $data[0];
+                            $eventId = $data[1];
+                            $response = $data[2];
+                            $this->executeCallback($eventId, $response);
+                        } else {
+                            $event = array_shift($data);
+                            $params = $data;
+                            $this->triggerListener($event, $params);
+                        }
+                    break;
+                    default:
+                        throw new Exception("Unhandled packet code");
+                }
+            } else {
+                throw new Exception("No code for packet");
+            }
+        }
+    }
+
+    private function triggerListener($event, $params) {
+        if(isset($this->eventListeners[$event])) {
+            $cb = $this->eventListeners[$event];
+            if(is_callable($cb)) {
+                call_user_func($cb, ...$params);
+            }
+        }
+    }
+
+    private function executeCallback($eventId, $response) {
+        $cb = $this->getCallback($eventId);
+        if($cb) {
+            call_user_func_array($cb, [$response]);
+        }
+        unset($this->callbacks[$eventId]);
+    }
+
+    private function getCallback($eventId) {
+        if(isset($this->callbacks[$eventId])) {
+            $cb = $this->callbacks[$eventId];
+            if(is_callable($cb)) {
+                return $cb;
+            }
+        }
+        return false;
     }
 
     /**
@@ -88,14 +161,27 @@ class Client
      *
      * @return $this
      */
-    public function emit($event, array $args)
+    public function emit($event, array $args, callable $ack = null)
     {
+        if($ack) {
+            $eventId = uniqid();
+            $args[]="ACK:$eventId";
+            $this->registerCallback($eventId, $ack);
+        }
+
         $this->logger->debug('Sending a new message', ['event' => $event, 'args' => $args]);
-        $this->engine->emit($event, $args);
+        $this->engine->emit($event, $args, is_callable($ack));
 
         return $this;
     }
 
+    private function registerCallback($eventId, $cb) {
+        $this->callbacks[$eventId]=$cb;
+    }
+
+    public function on($event, $cb) {
+        $this->eventListeners[$event] = $cb;
+    }
     /**
      * Sets the namespace for the next messages
      *

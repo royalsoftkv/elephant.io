@@ -93,7 +93,7 @@ class Version1X extends AbstractSocketIO
     }
 
     /** {@inheritDoc} */
-    public function emit($event, array $args)
+    public function emit($event, array $args, $ack)
     {
         $this->keepAlive();
         $namespace = $this->namespace;
@@ -102,7 +102,7 @@ class Version1X extends AbstractSocketIO
             $namespace .= ',';
         }
 
-        return $this->write(EngineInterface::MESSAGE, static::EVENT . $namespace . \json_encode([$event, $args]));
+        return $this->write(EngineInterface::MESSAGE, static::EVENT .($ack?"0":"") . $namespace . json_encode([$event, $args]));
     }
 
     /** {@inheritDoc} */
